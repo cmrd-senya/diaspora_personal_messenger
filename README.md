@@ -12,7 +12,7 @@ From the checked out source run:
 ```
 This will give you an interactive console.
 
-Set your hostname so it is visible to the pod you want to communicate:
+Set your hostname so it is visible from the pod you want to communicate:
 ```
   set_myhost "example.com"
 ```
@@ -35,4 +35,11 @@ Send a message (a conversation, actually):
 Quit with command:
 ```
   quit
+```
+## Installation
+```
+  git clone https://github.com/cmrd-senya/diaspora_personal_messenger.git
+  cd diaspora_personal_messenger
+  gem install bundler
+  bundle install
 ```
