@@ -5,7 +5,7 @@ def federation_configure
 
     config.define_callbacks do
       on :fetch_person_for_webfinger do |id|
-        DiasporaFederation::Discovery::WebFinger.new({
+        DiasporaFederation::Discovery::WebFinger.new(
           acct_uri:    current_user.diaspora_id,
           alias_url:   "#{current_settings.my_url}/people/#{current_user.guid}",
           hcard_url:   "#{current_settings.my_url}/hcard/users/#{current_user.guid}",
@@ -15,11 +15,11 @@ def federation_configure
           salmon_url:  "#{current_settings.my_url}/receive/users/#{current_user.guid}",
           guid:        current_user.guid,
           public_key:  current_user.public_key.to_s
-        })
+        )
       end
 
       on :fetch_person_for_hcard do |guid|
-        DiasporaFederation::Discovery::HCard.new({
+        DiasporaFederation::Discovery::HCard.new(
           guid:             current_user.guid,
           diaspora_handle:  current_user.diaspora_id,
           full_name:        current_user.name,
@@ -32,50 +32,60 @@ def federation_configure
           first_name:       current_user.name,
           last_name:        "",
           nickname:         current_user.name,
-        })
+        )
       end
 
       on :save_person_after_webfinger do |person|
-        Person.create(person.to_h).save
+        data = person.to_h
+        data[:diaspora_id] = data.delete(:author)
+        Person.create(data).save
       end
 
-      on :fetch_private_key_by_diaspora_id do |diaspora_id|
+      on :fetch_related_entity do |type, guid|
+        DiasporaFederation::Entities::RelatedEntity.new(Post.first(guid).attributes)
+      end
+
+      on :fetch_person_url_to do |author, path|
+        Person.find_or_fetch_by_diaspora_id(author).url + path
+      end
+
+      on :queue_public_receive do |xml, _legacy|
+        puts "queue_public_receive"
+        DiasporaFederation::Federation::Receiver.receive_public(xml)
+      end
+
+      on :queue_private_receive do |guid, xml, _legacy|
+        puts "queue_private_receive(guid=#{guid}, xml=#{xml})"
+        rsa_key = User.first(guid: guid).private_key
+        DiasporaFederation::Federation::Receiver.receive_private(xml, rsa_key, guid)
+      end
+
+      on :fetch_private_key do |diaspora_id|
         current_user.private_key if diaspora_id == current_user.diaspora_id
       end
 
-      on :fetch_private_key_by_user_guid do |guid|
-        current_user.private_key if guid == current_user.guid
-      end
-
-      on :fetch_author_private_key_by_entity_guid do |entity_type, guid|
-        if Object.const_get(entity_type).first(guid: guid).diaspora_id == current_user.diaspora_id
-          current_user.private_key
-        end
-      end
-
-      on :fetch_public_key_by_diaspora_id do |diaspora_id|
+      on :fetch_public_key do |diaspora_id|
         Person.first(diaspora_id: diaspora_id).public_key
       end
 
-      on :fetch_author_public_key_by_entity_guid do |entity_type, guid|
-        klass = Object.const_get(entity_type)
-        Person.first(diaspora_id: klass.first(guid).diaspora_id).public_key
+      on :receive_entity do |entity, sender, recipient|
+        puts "Entity received type:#{entity.class} from:#{sender} to:#{recipient.nil? ? "public" : recipient}"
+        if entity.class == DiasporaFederation::Entities::StatusMessage
+          entity_hash = entity.to_h
+          Post.create(
+            %i(guid author public).map {|key| [key, entity_hash[key]]}.to_h
+          ).save!
+        elsif entity.class == DiasporaFederation::Entities::Comment
+          puts "Comment = #{entity.to_h}"
+        end
       end
 
-      on :entity_author_is_local? do |entity_type, guid|
-        klass = Object.const_get(entity_type)
-        user_guid = Users.find(diaspora_id: klass.first(guid).diaspora_id).guid
-        !Users.find(guid: user_guid).nil?
-      end
-    
-      on :fetch_entity_author_id_by_guid do |entity_type, guid|
-        klass = Object.const_get(entity_type)
-        klass.first(guid).diaspora_id
+      on :fetch_public_entity do |entity_type, guid|
+        puts "fetch_public_entity"
       end
 
-      on :entity_persist do |entity, recipient_guid, sender_id|
-        puts "entity_persist"
-        puts "Entity received type:#{entity.class} from:#{sender_id} to:#{recipient_guid.nil? ? "public" : recipient_guid}"
+      on :update_pod do |url, status|
+        puts "update_pod"
       end
     end
   end

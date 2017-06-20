@@ -10,7 +10,7 @@ class Settings
   property :myhost, String
 
   def my_url
-    "http://#{myhost}"
+    "https://#{myhost}"
   end
 end
 
@@ -101,6 +101,18 @@ class Conversation
   property :guid, String, :required => true, :unique => true, :key => true
 
   property :diaspora_id, String
+end
+
+class Post
+  include DataMapper::Resource
+
+  property :guid, String, :required => true, :unique => true, :key => true
+
+  property :author, String
+
+  property :public, Boolean
+
+  property :local, Boolean, default: false
 end
 
 def create_user(name)

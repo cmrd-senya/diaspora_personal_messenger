@@ -4,6 +4,28 @@ require "diaspora_federation"
 require "diaspora_federation-sinatra_app"
 require "./db-schema"
 require "./initializers/diaspora_federation"
+require "pry-byebug"
+require "typhoeus"
+
+require 'webrick/https'
+
+require 'rack/ssl'
+use Rack::SSL
+
+require 'faraday'
+module Faraday
+  class Adapter
+    class NetHttp < Faraday::Adapter
+      # See original definition here:
+      # https://github.com/technoweenie/faraday/blob/412844ac1d90faef1bba5eed25091279358bdf99/lib/faraday/adapter/net_http.rb#L107
+      def ssl_verify_mode(ssl)
+        OpenSSL::SSL::VERIFY_NONE
+      end
+    end
+  end
+end
+
+DiasporaFederation::Federation::Sender::HydraWrapper.hydra_opts.merge!(ssl_verifypeer: false, ssl_verifyhost: 0)
 
 def create_message(conversation_guid, message)
   message = DiasporaFederation::Entities::Message.new(
@@ -33,22 +55,48 @@ def create_conversations(recipient_id, message)
   )
 end
 
+def related_entity(entity)
+  DiasporaFederation::Entities::RelatedEntity.new(
+      author: entity.author,
+      local:  false,
+      public: entity.public
+  )
+end
+
+def create_comment(text, parent_guid)
+  DiasporaFederation::Entities::Comment.new(
+    guid: UUID.generate(:compact),
+    parent: related_entity(Post.first(parent_guid)),
+    parent_guid: parent_guid,
+    author:      current_user.diaspora_id,
+    text:        text,
+    created_at:  Time.now.utc
+  )
+end
+
+def fetch_post(author, guid)
+  DiasporaFederation::Entities::RelatedEntity.fetch(author, "Post", guid)
+end
+
 def send_entity(recipient_id, entity)
   recipient = Person.find_or_fetch_by_diaspora_id(recipient_id)
   raise "Failed to fetch person with id #{recipient_id}" if recipient.nil?
-  DiasporaFederation::HydraWrapper.new(
-    current_user,
-    [recipient],
-    entity,
-    false
-  ).tap do |hydra|
-    hydra.enqueue_batch
-    hydra.run
-  end
+  DiasporaFederation::Federation::Sender.public(
+    current_user.diaspora_id,
+    "",
+    [recipient.url + "/receive/public"],
+    DiasporaFederation::Salmon::MagicEnvelope.new(
+        entity, current_user.diaspora_id
+    ).envelop(current_user.private_key).to_xml
+  )
 end
 
 def send_message(recipient_id, message)
   send_entity(recipient_id, create_conversations(recipient_id, message))
+end
+
+def send_comment(recipient_id, text, parent_guid)
+  send_entity(recipient_id, create_comment(text, parent_guid))
 end
 
 def send_request(recipient_id)
@@ -72,7 +120,7 @@ def set_myhost(myhost)
   end
 
   DiasporaFederation.configure do |config|
-    config.server_uri = myhost
+    config.server_uri = "https://" + myhost
   end
 end
 
@@ -85,6 +133,7 @@ DataMapper.auto_upgrade!
 
 class FederationEndpoints < DiasporaFederation::SinatraApp
   set :bind, "0.0.0.0"
+  set :port, 4568
 
   get "/" do
     ""
